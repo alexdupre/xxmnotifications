@@ -13,5 +13,10 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center_horizontal"
-        android:text="@string/enable_notifications" />
+        android:paddingLeft="@dimen/button_padding"
+        android:paddingTop="@dimen/button_padding"
+        android:paddingRight="@dimen/button_padding"
+        android:paddingBottom="@dimen/button_padding"
+        android:text="@string/enable_notifications"
+        android:textSize="@dimen/text_size" />
 </LinearLayout>
