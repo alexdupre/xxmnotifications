@@ -9,9 +9,7 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
-import java.io.BufferedReader
 import java.io.IOException
-import java.io.InputStreamReader
 import kotlin.random.Random
 
 class NotificationService : Service() {
@@ -19,6 +17,9 @@ class NotificationService : Service() {
     companion object {
         @Volatile
         var running = false
+
+        const val maxMsgLen = 385
+        const val maxInitialMsgLen = maxMsgLen - 6
     }
 
     lateinit var lr: LogReader
@@ -45,23 +46,62 @@ class NotificationService : Service() {
 
         override fun run() {
             running = true
-            val br = BufferedReader(InputStreamReader(p.inputStream))
             Log.i("XXM", "Monitoring logcat")
             var line: String?
+            var bytes: ByteArray?
+            val br = p.inputStream.bufferedReader(Charsets.ISO_8859_1)
             do {
                 try {
                     line = br.readLine()
-                    if (line != null && line.contains("Result of partition validation")) {
-                        val bytes = line.toByteArray()
-                        val pktStart = bytes.indexOf(1)
-                        val msgLen = bytes[pktStart + 4].toInt() and 0xFF
-                        val msgStart = pktStart + 5
-                        val msg = String(bytes, msgStart, minOf(msgLen, bytes.size - msgStart))
-                        Log.v("XXM", "Decrypted: " + line)
-                        Log.i("XXM", "Message: " + msg)
-                        sendNotification(msg)
-                    } else if (line != null && line.contains("Message did not decrypt properly")) {
-                        sendNotification("A message was lost!")
+                    if (line != null) {
+                        val idx = line.indexOf("Result of partition validation")
+                        if (idx > 0) {
+                            bytes = (line + '\n').toByteArray(Charsets.ISO_8859_1)
+                            var idx1 = line.indexOf(',', idx)
+                            var idx2 = line.indexOf(',', idx1 + 1)
+                            val msgIndex = line.substring(idx1 + 2, idx2).toInt()
+                            idx1 = idx2
+                            idx2 = line.indexOf(',', idx1 + 1)
+                            val msgTotal = line.substring(idx1 + 2, idx2).toInt()
+                            Log.i(
+                                "XXM",
+                                "Partial message " + (msgIndex + 1) + " of " + (msgTotal + 1)
+                            )
+                            val pktStart = idx2 + 2
+                            /*
+                            Log.v("XXM", "Lenght: " + bytes.size)
+                            for (i in pktStart until bytes.size) Log.v(
+                                "XXM",
+                                "Char " + i + ": " + (bytes[i].toInt() and 0xFF)
+                            )
+                             */
+                            if (msgIndex == 0 && bytes[pktStart] == 1.toByte() && bytes[pktStart + 1] == 16.toByte() && bytes[pktStart + 2] == 1.toByte() && bytes[pktStart + 3] == 26.toByte()) {
+                                var totalMsgLen = bytes[pktStart + 4].toInt() and 0xFF
+                                if (totalMsgLen > 127) totalMsgLen =
+                                    (totalMsgLen - 128) + (bytes[pktStart + 5].toInt() and 0xFF) * 128
+                                Log.i("XXM", "Total message length: " + totalMsgLen)
+                                var msgLen = minOf(totalMsgLen, maxInitialMsgLen)
+                                var msgStart = pktStart + if (totalMsgLen > 127) 6 else 5
+                                val msg = StringBuilder()
+                                var curLen = minOf(msgLen, bytes.size - msgStart)
+                                msg.append(String(bytes, msgStart, curLen, Charsets.UTF_8))
+                                msgLen -= curLen
+                                while (msgLen > 0) {
+                                    line = br.readLine()
+                                    bytes = (line + '\n').toByteArray(Charsets.ISO_8859_1)
+                                    msgStart = line.indexOf(':', line.indexOf("GoLog")) + 2
+                                    curLen = minOf(msgLen, bytes.size - msgStart)
+                                    msg.append(String(bytes, msgStart, curLen, Charsets.UTF_8))
+                                    msgLen -= curLen
+                                }
+                                Log.i("XXM", "Message: " + msg)
+                                sendNotification(msg.toString())
+                            } else if (line != null && line.contains("Message did not decrypt properly")) {
+                                sendNotification("A message was lost! (or another used added you)")
+                            }
+                        }
+                    } else {
+                        running = false
                     }
                 } catch (e: IOException) {
                     running = false
