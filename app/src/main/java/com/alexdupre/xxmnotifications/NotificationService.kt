@@ -12,7 +12,6 @@ import androidx.core.app.Person
 import java.io.BufferedReader
 import java.io.IOException
 import java.io.InputStreamReader
-import java.util.regex.Pattern
 import kotlin.random.Random
 
 class NotificationService : Service() {
@@ -30,7 +29,7 @@ class NotificationService : Service() {
 
     override fun onCreate() {
         Log.i("XXM", "Starting service")
-        Runtime.getRuntime().exec("logcat -c")
+        ProcessBuilder("logcat", "-c").start() // clean logcat buffer
         val p: Process = ProcessBuilder("logcat", "GoLog:V", "*:S").start()
         lr = LogReader(this, p)
         Thread(lr).start()
@@ -49,42 +48,20 @@ class NotificationService : Service() {
             val br = BufferedReader(InputStreamReader(p.inputStream))
             Log.i("XXM", "Monitoring logcat")
             var line: String?
-            val pattern =
-                Pattern.compile("^.+Result of partition validation: \\[[^\\]]+\\], [0-9]+, [0-9]+, (.*).{4}$")
             do {
                 try {
                     line = br.readLine()
-                    if (line != null) {
-                        val m = pattern.matcher(line)
-                        if (m.matches()) {
-                            val msg = m.group(1)
-                            Log.v("XXM", "Decrypted: " + line)
-                            Log.i("XXM", "Message: " + msg)
-
-                            /*
-                            val intent = Uri.parse("xxmessenger:/").let { uri ->
-                                Intent(Intent.ACTION_VIEW, uri)
-                            }
-                            val pendingIntent: PendingIntent = PendingIntent.getActivity(s, 0, intent, 0)
-                             */
-
-                            val me = Person.Builder().setName("Me").build()
-                            val style = NotificationCompat.MessagingStyle(me)
-                                .addMessage(msg, System.currentTimeMillis(), null as Person?)
-                            val n = NotificationCompat.Builder(s, s.getString(R.string.channel_id))
-                                .setSmallIcon(android.R.drawable.stat_notify_chat)
-                                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                                .setDefaults(Notification.DEFAULT_SOUND or Notification.DEFAULT_VIBRATE or Notification.DEFAULT_LIGHTS)
-                                .setStyle(style)
-                                //.setContentIntent(pendingIntent)
-                                .build()
-
-                            with(NotificationManagerCompat.from(s)) {
-                                // notificationId is a unique int for each notification that you must define
-                                notify(Random.nextInt(), n)
-                            }
-                        }
+                    if (line != null && line.contains("Result of partition validation")) {
+                        val bytes = line.toByteArray()
+                        val pktStart = bytes.indexOf(1)
+                        val msgLen = bytes[pktStart + 4].toInt() and 0xFF
+                        val msgStart = pktStart + 5
+                        val msg = String(bytes, msgStart, minOf(msgLen, bytes.size - msgStart))
+                        Log.v("XXM", "Decrypted: " + line)
+                        Log.i("XXM", "Message: " + msg)
+                        sendNotification(msg)
+                    } else if (line != null && line.contains("Message did not decrypt properly")) {
+                        sendNotification("A message was lost!")
                     }
                 } catch (e: IOException) {
                     running = false
@@ -94,6 +71,31 @@ class NotificationService : Service() {
                 }
             } while (running)
             Log.i("XXM", "Stopped monitoring")
+        }
+
+        private fun sendNotification(msg: String) {
+            val me = Person.Builder().setName("Me").build()
+            val style = NotificationCompat.MessagingStyle(me)
+                .addMessage(msg, System.currentTimeMillis(), null as Person?)
+            /*
+            val intent = Uri.parse("xxmessenger:/").let { uri ->
+                Intent(Intent.ACTION_VIEW, uri)
+            }
+            val pendingIntent: PendingIntent = PendingIntent.getActivity(s, 0, intent, 0)
+             */
+            val n = NotificationCompat.Builder(s, s.getString(R.string.channel_id))
+                .setSmallIcon(android.R.drawable.stat_notify_chat)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setDefaults(Notification.DEFAULT_SOUND or Notification.DEFAULT_VIBRATE or Notification.DEFAULT_LIGHTS)
+                .setStyle(style)
+                //.setContentIntent(pendingIntent)
+                .build()
+
+            with(NotificationManagerCompat.from(s)) {
+                // notificationId is a unique int for each notification that you must define
+                notify(Random.nextInt(), n)
+            }
         }
 
         fun stop() {
