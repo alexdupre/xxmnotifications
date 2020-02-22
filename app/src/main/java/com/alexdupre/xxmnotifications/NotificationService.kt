@@ -63,11 +63,11 @@ class NotificationService : Service() {
                             idx1 = idx2
                             idx2 = line.indexOf(',', idx1 + 1)
                             val msgTotal = line.substring(idx1 + 2, idx2).toInt()
+                            val pktStart = idx2 + 2
                             Log.i(
                                 "XXM",
-                                "Partial message " + (msgIndex + 1) + " of " + (msgTotal + 1)
+                                "Partial message " + (msgIndex + 1) + " of " + (msgTotal + 1) + " - Partial length (with padding): " + (bytes.size - pktStart)
                             )
-                            val pktStart = idx2 + 2
                             /*
                             Log.v("XXM", "Lenght: " + bytes.size)
                             for (i in pktStart until bytes.size) Log.v(
@@ -96,9 +96,9 @@ class NotificationService : Service() {
                                 }
                                 Log.i("XXM", "Message: " + msg)
                                 sendNotification(msg.toString())
-                            } else if (line != null && line.contains("Message did not decrypt properly")) {
-                                sendNotification("A message was lost! (or another used added you)")
                             }
+                        } else if (line.contains("Message did not decrypt properly")) {
+                            sendNotification("A message was lost! (or another user added you)")
                         }
                     } else {
                         running = false
