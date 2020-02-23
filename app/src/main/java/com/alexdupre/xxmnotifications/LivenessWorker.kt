@@ -46,7 +46,7 @@ class LivenessWorker(context: Context, workerParams: WorkerParameters) :
         )
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle("Liveness Check")
-            .setContentText("The xx messenger backend connection has been lost.")
+            .setContentText("The xx messenger backend connection is not active.")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ERROR)
             .setDefaults(Notification.DEFAULT_SOUND or Notification.DEFAULT_VIBRATE or Notification.DEFAULT_LIGHTS)
