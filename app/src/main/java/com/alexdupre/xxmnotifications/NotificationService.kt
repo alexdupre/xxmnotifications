@@ -9,7 +9,10 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
+import androidx.work.PeriodicWorkRequest
+import androidx.work.WorkManager
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
 class NotificationService : Service() {
@@ -17,9 +20,15 @@ class NotificationService : Service() {
     companion object {
         @Volatile
         var running = false
+        @Volatile
+        var lastTick = System.currentTimeMillis()
+        @Volatile
+        var notified = false
 
         const val maxMsgLen = 385
         const val maxInitialMsgLen = maxMsgLen - 6
+
+        const val livenessCheckTag = "LivenessCheck"
     }
 
     lateinit var lr: LogReader
@@ -33,13 +42,25 @@ class NotificationService : Service() {
         ProcessBuilder("logcat", "-c").start() // clean logcat buffer
         val p: Process = ProcessBuilder("logcat", "GoLog:V", "*:S").start()
         lr = LogReader(this, p)
+        scheduleLivenessCheck()
         Thread(lr).start()
         Toast.makeText(this, "Service started", Toast.LENGTH_LONG).show()
     }
 
     override fun onDestroy() {
+        WorkManager.getInstance(this).cancelAllWorkByTag(livenessCheckTag)
         lr.stop()
         Toast.makeText(this, "Service stopped", Toast.LENGTH_LONG).show()
+    }
+
+    fun scheduleLivenessCheck() {
+        //WorkManager.getInstance(this).cancelAllWork()
+        WorkManager.getInstance(this).cancelAllWorkByTag(livenessCheckTag)
+        val wr = PeriodicWorkRequest.Builder(LivenessWorker::class.java, 15, TimeUnit.MINUTES)
+            .setInitialDelay(1, TimeUnit.MINUTES)
+            .addTag(livenessCheckTag)
+            .build()
+        WorkManager.getInstance(this).enqueue(wr)
     }
 
     class LogReader(private val s: Service, private val p: Process) : Runnable {
@@ -99,6 +120,8 @@ class NotificationService : Service() {
                             }
                         } else if (line.contains("Message did not decrypt properly")) {
                             sendNotification("A message was lost! (or another user added you)")
+                        } else if (line.contains("Over the passed 30s gateway has been checked")) {
+                            lastTick = System.currentTimeMillis()
                         }
                     } else {
                         running = false

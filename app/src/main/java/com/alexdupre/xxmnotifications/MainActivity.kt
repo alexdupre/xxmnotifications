@@ -16,7 +16,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         createNotificationChannel()
         val button: Button = findViewById(R.id.button)
-        //if (NotificationService.running) button.text = getText(R.string.disable_notifications)
+        if (NotificationService.running) button.text = getText(R.string.disable_notifications)
         button.setOnClickListener {
             if (button.text == getText(R.string.enable_notifications)) {
                 startService(Intent(this, NotificationService::class.java))
