@@ -13,6 +13,7 @@ import androidx.work.PeriodicWorkRequest
 import androidx.work.WorkManager
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlin.math.pow
 import kotlin.random.Random
 
 class NotificationService : Service() {
@@ -20,13 +21,12 @@ class NotificationService : Service() {
     companion object {
         @Volatile
         var running = false
+
         @Volatile
         var lastTick = System.currentTimeMillis()
+
         @Volatile
         var notified = false
-
-        const val maxMsgLen = 385
-        const val maxInitialMsgLen = maxMsgLen - 6
 
         const val livenessCheckTag = "LivenessCheck"
     }
@@ -75,53 +75,83 @@ class NotificationService : Service() {
                 try {
                     line = br.readLine()
                     if (line != null) {
-                        val idx = line.indexOf("Result of partition validation")
-                        if (idx > 0) {
-                            bytes = (line + '\n').toByteArray(Charsets.ISO_8859_1)
-                            var idx1 = line.indexOf(',', idx)
-                            var idx2 = line.indexOf(',', idx1 + 1)
-                            val msgIndex = line.substring(idx1 + 2, idx2).toInt()
-                            idx1 = idx2
-                            idx2 = line.indexOf(',', idx1 + 1)
-                            val msgTotal = line.substring(idx1 + 2, idx2).toInt()
-                            val pktStart = idx2 + 2
-                            Log.i(
-                                "XXM",
-                                "Partial message " + (msgIndex + 1) + " of " + (msgTotal + 1) + " - Partial length (with padding): " + (bytes.size - pktStart)
-                            )
-                            /*
-                            Log.v("XXM", "Lenght: " + bytes.size)
-                            for (i in pktStart until bytes.size) Log.v(
-                                "XXM",
-                                "Char " + i + ": " + (bytes[i].toInt() and 0xFF)
-                            )
-                             */
-                            if (msgIndex == 0 && bytes[pktStart] == 1.toByte() && bytes[pktStart + 1] == 16.toByte() && bytes[pktStart + 2] == 1.toByte() && bytes[pktStart + 3] == 26.toByte()) {
-                                var totalMsgLen = bytes[pktStart + 4].toInt() and 0xFF
-                                if (totalMsgLen > 127) totalMsgLen =
-                                    (totalMsgLen - 128) + (bytes[pktStart + 5].toInt() and 0xFF) * 128
-                                Log.i("XXM", "Total message length: " + totalMsgLen)
-                                var msgLen = minOf(totalMsgLen, maxInitialMsgLen)
-                                var msgStart = pktStart + if (totalMsgLen > 127) 6 else 5
-                                val msg = StringBuilder()
-                                var curLen = minOf(msgLen, bytes.size - msgStart)
-                                msg.append(String(bytes, msgStart, curLen, Charsets.UTF_8))
-                                msgLen -= curLen
-                                while (msgLen > 0) {
+                        val startIdx = line.indexOf("[CLIENT]")
+                        if (startIdx > 0) { // start of new log message
+                            val partitionIdx = line.indexOf("Partition: [", startIdx)
+                            if (partitionIdx > 0) { // start of new decrypted message
+                                var bytesIdx = partitionIdx + 12
+                                val bytesStr = StringBuilder()
+                                while (line!!.indexOf("]", bytesIdx) == -1) {
+                                    // concatenate multiple log messages
+                                    bytesStr.append(line.substring(bytesIdx))
                                     line = br.readLine()
-                                    bytes = (line + '\n').toByteArray(Charsets.ISO_8859_1)
-                                    msgStart = line.indexOf(':', line.indexOf("GoLog")) + 2
-                                    curLen = minOf(msgLen, bytes.size - msgStart)
-                                    msg.append(String(bytes, msgStart, curLen, Charsets.UTF_8))
-                                    msgLen -= curLen
+                                    bytesIdx = startIdx
                                 }
-                                Log.i("XXM", "Message: " + msg)
-                                sendNotification(msg.toString())
+                                bytesStr.append(line.substring(bytesIdx, line.indexOf("]", bytesIdx)))
+                                Log.d("XXM", "Partition [$bytesStr]")
+                                bytes = bytesStr.split(" ").map { it.toInt().toByte() }.toByteArray()
+                                var i = 0
+                                val idAndLen = parseInt(bytes, i)
+                                val id = idAndLen.first
+                                i += idAndLen.second
+                                val pktIndex = bytes[i++].toInt() and 0xFF
+                                val pktCount = bytes[i++].toInt() and 0xFF
+                                Log.d(
+                                    "XXM",
+                                    "Packet [$id] ${pktIndex + 1}/${pktCount + 1} - Length: ${bytes.size - i}"
+                                )
+                                if (pktIndex > 0) {
+                                    // should re-assemble
+                                } else {
+                                    val msgType = bytes[i++].toInt() and 0xFF
+                                    when (msgType) {
+                                        1 -> {
+                                            if (bytes[i++].toInt() == 16 && bytes[i++].toInt() == 1 && bytes[i++].toInt() == 26) {
+                                                val msgLenAndLen = parseInt(bytes, i)
+                                                val msgLen = msgLenAndLen.first
+                                                i += msgLenAndLen.second
+                                                val partLen = minOf(msgLen, bytes.size - i)
+                                                Log.d(
+                                                    "XXM",
+                                                    "Message length: $msgLen - First part length: $partLen"
+                                                )
+                                                val notificationLen = minOf(partLen, 300) // don't exceed 300 chars...
+                                                var msg = String(bytes, i, notificationLen, Charsets.UTF_8)
+                                                if (notificationLen < msgLen) msg += "..."
+                                                Log.i("XXM", "Message: $msg")
+                                                sendNotification(msg)
+                                            } else {
+                                                // weird 3 bytes
+                                                Log.d(
+                                                    "XXM",
+                                                    "Received message with type 1 but unexpected first 3 bytes"
+                                                )
+                                            }
+                                        }
+                                        13 -> { // something related to contact addition
+                                            Log.d("XXM", "Something related to contact addition")
+                                        }
+                                        17 -> { // result of search contact
+                                            Log.d("XXM", "Result of search contact")
+                                        }
+                                        45 -> { // handshake final message
+                                            Log.i("XXM", "You have a new contact!")
+                                            sendNotification("You have a new contact!")
+                                        }
+                                        46 -> { // contact deleted
+                                            Log.i("XXM", "Someone deleted you as contact")
+                                            sendNotification("Someone deleted you as contact")
+                                        }
+                                        else -> { // another msg type
+                                            Log.d("XXM", "Received message with type $msgType")
+                                        }
+                                    }
+                                }
+                            } else if (line.indexOf("Message did not decrypt properly", startIdx) != -1) {
+                                sendNotification("A message was lost! (or another user added you)")
+                            } else if (line.indexOf("Over the passed 30s gateway has been checked", startIdx) != -1) {
+                                lastTick = System.currentTimeMillis()
                             }
-                        } else if (line.contains("Message did not decrypt properly")) {
-                            sendNotification("A message was lost! (or another user added you)")
-                        } else if (line.contains("Over the passed 30s gateway has been checked")) {
-                            lastTick = System.currentTimeMillis()
                         }
                     } else {
                         running = false
@@ -130,10 +160,21 @@ class NotificationService : Service() {
                     running = false
                 } catch (t: Throwable) {
                     running = false
-                    Log.e("XXM", "Unexpected error: " + t.message, t)
+                    Log.e("XXM", "Unexpected error: ${t.message}", t)
                 }
             } while (running)
             Log.i("XXM", "Stopped monitoring")
+        }
+
+        private fun parseInt(bytes: ByteArray, startIdx: Int): Pair<Int, Int> {
+            var i = 0
+            var result = 0
+            while (bytes[startIdx + i] < 0) {
+                result += (bytes[startIdx + i] + 128) * 128.0.pow(i).toInt()
+                i++
+            }
+            result += bytes[startIdx + i] * 128.0.pow(i).toInt()
+            return Pair(result, i + 1)
         }
 
         private fun sendNotification(msg: String) {
